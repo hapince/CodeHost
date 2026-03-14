@@ -1,0 +1,457 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// User model
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  avatar       String?
+  balance      Float    @default(0)  // User balance (revenue from code sales)
+  role         String   @default("USER") @db.VarChar(20) // "USER" | "ADMIN"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  ownedProjects   Project[]       @relation("ProjectOwner")
+  projectMembers  ProjectMember[]
+  commits         Commit[]
+  fileVersions    FileVersion[]
+  sessions        Session[]
+  sentInvitations     Invitation[] @relation("InvitationSender")
+  receivedInvitations Invitation[] @relation("InvitationReceiver")
+  comments        Comment[]
+  purchases       Purchase[]    @relation("UserPurchases")
+  stars           Star[]
+  notifications   Notification[]
+  topUps          TopUp[]
+  cartItems       CartItem[]
+  productOrders   ProductOrder[]
+}
+
+// Session model (for authentication)
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @db.VarChar(255)
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Project model
+model Project {
+  id          String   @id @default(cuid())
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  slug        String   @unique @db.VarChar(255) // URL-friendly identifier
+  isPrivate   Boolean  @default(true)
+  isArchived  Boolean  @default(false)
+  price       Float    @default(0)  // Project price (0 means free)
+  language    String?  @db.VarChar(50) // Project language/tech stack label
+  status      String   @default("APPROVED") @db.VarChar(20) // "PENDING" | "APPROVED" | "REJECTED"
+  rejectReason String? @db.Text // Rejection reason
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Owner relation
+  ownerId String
+  owner   User   @relation("ProjectOwner", fields: [ownerId], references: [id])
+
+  // Other relations
+  members     ProjectMember[]
+  files       File[]
+  branches    Branch[]
+  commits     Commit[]
+  invitations Invitation[]
+  comments    Comment[]
+  purchases   Purchase[]    @relation("ProjectPurchases")
+  stars       Star[]
+
+  @@index([ownerId])
+  @@index([slug])
+  @@index([status])
+}
+
+// Project member model
+model ProjectMember {
+  id       String   @id @default(cuid())
+  role     String   @default("VIEWER")  // "OWNER" | "EDITOR" | "VIEWER"
+  joinedAt DateTime @default(now())
+
+  // Relations
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+  @@index([projectId])
+}
+
+// Roles (using string fields)
+
+// File model
+model File {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(500)
+  path      String   @db.VarChar(1000) // /src/components/Button.tsx
+  type      String   // "FILE" | "FOLDER"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Project relation
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // File hierarchy relation (self-referencing)
+  parentId String?
+  parent   File?   @relation("FileHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children File[]  @relation("FileHierarchy")
+
+  // Version relation
+  versions FileVersion[]
+
+  @@unique([projectId, path(length: 500)])
+  @@index([projectId])
+  @@index([parentId])
+}
+
+// File types (using string fields)
+
+// File version model
+model FileVersion {
+  id        String   @id @default(cuid())
+  content   String   @db.LongText // File content
+  size      Int      // Size in bytes
+  hash      String   @db.VarChar(255) // Content hash for deduplication
+  createdAt DateTime @default(now())
+
+  // File relation
+  fileId String
+  file   File   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  // Commit relation
+  commitId String
+  commit   Commit @relation(fields: [commitId], references: [id], onDelete: Cascade)
+
+  // Author relation
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id])
+
+  @@index([fileId])
+  @@index([commitId])
+}
+
+// Branch model
+model Branch {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(255)
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Project relation
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Commit relation
+  commits Commit[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+// Commit model
+model Commit {
+  id        String   @id @default(cuid())
+  message   String   @db.Text
+  hash      String   @unique @db.VarChar(255) // SHA-256 hash
+  timestamp DateTime @default(now())
+
+  // Author relation
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id])
+
+  // Project relation
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Branch relation
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  // File version relation
+  fileVersions FileVersion[]
+
+  // Commit history (self-referencing)
+  parentId String?
+  parent   Commit?  @relation("CommitHistory", fields: [parentId], references: [id], onDelete: SetNull)
+  children Commit[] @relation("CommitHistory")
+
+  @@index([projectId])
+  @@index([branchId])
+  @@index([authorId])
+}
+
+// Project invitation model
+model Invitation {
+  id        String   @id @default(cuid())
+  status    String   @default("PENDING") @db.VarChar(20) // "PENDING" | "ACCEPTED" | "REJECTED"
+  role      String   @default("VIEWER") @db.VarChar(20) // "EDITOR" | "VIEWER"
+  message   String?  @db.Text // Invitation message
+  createdAt DateTime @default(now())
+  expiresAt DateTime // Invitation expiry time
+
+  // Sender
+  senderId String
+  sender   User   @relation("InvitationSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  // Receiver
+  receiverId String
+  receiver   User   @relation("InvitationReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  // Project
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([receiverId, projectId])
+  @@index([receiverId])
+  @@index([projectId])
+  @@index([status])
+}
+
+// Comment model
+model Comment {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  status    String   @default("PENDING") @db.VarChar(20) // "PENDING" | "APPROVED" | "REJECTED"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Author relation
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  // Project relation
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Reply relation (self-referencing)
+  parentId String?
+  parent   Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies  Comment[] @relation("CommentReplies")
+
+  @@index([projectId])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([status])
+}
+
+// Purchase record model
+model Purchase {
+  id        String   @id @default(cuid())
+  amount    Float    // Purchase amount
+  createdAt DateTime @default(now())
+
+  // Buyer
+  buyerId String
+  buyer   User   @relation("UserPurchases", fields: [buyerId], references: [id], onDelete: Cascade)
+
+  // Purchased project
+  projectId String
+  project   Project @relation("ProjectPurchases", fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([buyerId, projectId])
+  @@index([buyerId])
+  @@index([projectId])
+}
+
+// Star model (similar to GitHub Star)
+model Star {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+  @@index([projectId])
+  @@index([userId])
+}
+
+// Notification model
+model Notification {
+  id        String   @id @default(cuid())
+  type      String   @db.VarChar(30) // "INVITATION" | "ORDER_BOUGHT" | "ORDER_SOLD" | "SYSTEM" | "REVIEW"
+  title     String   @db.VarChar(255)
+  content   String   @db.Text
+  isRead    Boolean  @default(false)
+  link      String?  @db.VarChar(500) // Link URL
+  createdAt DateTime @default(now())
+
+  // Receiver
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([type])
+}
+
+// System announcement model (admin-published global notifications)
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String   @db.VarChar(255)
+  content   String   @db.Text
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Top-up record model (Stripe payments)
+model TopUp {
+  id              String   @id @default(cuid())
+  amount          Float    // Top-up amount
+  currency        String   @default("usd") @db.VarChar(10)
+  status          String   @default("PENDING") @db.VarChar(20) // "PENDING" | "COMPLETED" | "FAILED"
+  stripeSessionId String?  @unique @db.VarChar(255) // Stripe checkout session ID
+  stripePaymentId String?  @db.VarChar(255) // Stripe payment intent ID
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // User relation
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([stripeSessionId])
+}
+
+// ===== Shop Module =====
+
+// Product model
+model Product {
+  id               String   @id @default(cuid())
+  title            String   @db.VarChar(255)
+  slug             String   @unique @db.VarChar(255)
+  shortDescription String?  @db.VarChar(500)
+  description      String?  @db.Text
+  price            Float    @default(0)
+  mainImage        String?  @db.VarChar(1000)
+  status           String   @default("ACTIVE") @db.VarChar(20) // "ACTIVE" | "INACTIVE"
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  images           ProductImage[]
+  variants         ProductVariant[]
+  cartItems        CartItem[]
+  orderItems       ProductOrderItem[]
+
+  @@index([slug])
+  @@index([status])
+}
+
+// Product image model (up to 6 additional images)
+model ProductImage {
+  id        String @id @default(cuid())
+  url       String @db.VarChar(1000)
+  sortOrder Int    @default(0)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+// Product variant model
+model ProductVariant {
+  id    String @id @default(cuid())
+  name  String @db.VarChar(255)
+  price Float
+  stock Int    @default(-1) // -1 means unlimited
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  cartItems  CartItem[]
+  orderItems ProductOrderItem[]
+
+  @@index([productId])
+}
+
+// Cart item model
+model CartItem {
+  id        String   @id @default(cuid())
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, productId, variantId])
+  @@index([userId])
+}
+
+// Product order model
+model ProductOrder {
+  id          String   @id @default(cuid())
+  orderNo     String   @unique @db.VarChar(50)
+  totalAmount Float
+  paidAmount  Float    @default(0) // Amount paid from balance
+  status      String   @default("PENDING_PAYMENT") @db.VarChar(20) // "PENDING_PAYMENT" | "PAID" | "CANCELLED"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Shipping info
+  shippingName    String? @db.VarChar(100)
+  shippingPhone   String? @db.VarChar(50)
+  shippingAddress String? @db.VarChar(500)
+  shippingCity    String? @db.VarChar(100)
+  shippingState   String? @db.VarChar(100)
+  shippingZip     String? @db.VarChar(20)
+  shippingCountry String? @db.VarChar(100)
+
+  // Stripe session id for partial payment
+  stripeSessionId String? @db.VarChar(255)
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  items ProductOrderItem[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+// Product order item model
+model ProductOrderItem {
+  id       String @id @default(cuid())
+  quantity Int
+  price    Float  // Price at time of purchase
+
+  orderId   String
+  order     ProductOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([productId])
+}
